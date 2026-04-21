@@ -77,49 +77,71 @@ def digistore_webhook():
 
     print("DIGISTORE DATA:", data, flush=True)
 
-    lizenz_key = hole_key_aus_daten(data)
+    import uuid
+
     event = str(data.get("event", "")).strip().lower()
     order_id = str(data.get("order_id", "")).strip()
-    buyer_email = str(data.get("buyer_email", "")).strip().lower()
+    buyer_email = str(
+        data.get("buyer_email")
+        or data.get("email")
+        or ""
+    ).strip().lower()
     product_id = str(data.get("product_id", "")).strip()
 
-    # wenn Digistore keinen Key liefert -> selbst erzeugen
-    if not lizenz_key and event not in [
+    lizenz_key = hole_key_aus_daten(data)
+
+    refund_events = [
         "refund", "chargeback", "cancel", "cancellation",
         "on_refund", "on_chargeback"
-    ]:
-        lizenz_key = "TM-" + str(uuid.uuid4())[:12].upper()
+    ]
 
     # Rückgabe / Sperrung
-    if event in [
-        "refund", "chargeback", "cancel", "cancellation",
-        "on_refund", "on_chargeback"
-    ]:
-        gefunden = False
+    if event in refund_events:
+        gefunden_key = None
 
         if lizenz_key and lizenz_key in keys:
-            keys[lizenz_key]["active"] = False
-            keys[lizenz_key]["event"] = event
-            gefunden = True
-
+            gefunden_key = lizenz_key
         elif order_id:
             for k, v in keys.items():
                 if str(v.get("order_id", "")).strip() == order_id:
-                    keys[k]["active"] = False
-                    keys[k]["event"] = event
-                    lizenz_key = k
-                    gefunden = True
+                    gefunden_key = k
                     break
 
-        speichere_keys(keys)
+        if gefunden_key:
+            keys[gefunden_key]["active"] = False
+            keys[gefunden_key]["event"] = event
+            speichere_keys(keys)
 
         return jsonify({
-            "ok": True,
-            "action": "deactivated" if gefunden else "refund_received_but_key_not_found",
-            "license_key": lizenz_key,
-            "event": event
+            "status": "success",
+            "key": "Lizenzstatus aktualisiert.",
+            "data": [],
+            "headline": "Lizenzstatus",
+            "show_on": ["receipt_page", "order_confirmation_email"]
         }), 200
 
+    # Kauf / Aktivierung
+    if not lizenz_key:
+        lizenz_key = "TM-" + str(uuid.uuid4())[:12].upper()
+
+    keys[lizenz_key] = {
+        "active": True,
+        "source": "digistore24",
+        "buyer_email": buyer_email,
+        "order_id": order_id,
+        "product_id": product_id,
+        "event": event or "purchase"
+    }
+
+    speichere_keys(keys)
+
+    return jsonify({
+        "status": "success",
+        "key": f"Lizenzschlüssel: {lizenz_key}",
+        "data": [],
+        "headline": "Ihr Lizenzschlüssel",
+        "show_on": ["receipt_page", "order_confirmation_email"]
+    }), 200
     # Kauf / Aktivierung
     if lizenz_key:
         keys[lizenz_key] = {
