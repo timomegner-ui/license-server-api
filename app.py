@@ -22,6 +22,25 @@ def speichere_keys(keys):
         json.dump(keys, f, indent=2, ensure_ascii=False)
 
 
+def lese_request_daten():
+    data = request.form.to_dict()
+    if not data:
+        try:
+            data = request.get_json(force=True, silent=True) or {}
+        except:
+            data = {}
+    return data
+
+
+def hole_key_aus_daten(data):
+    return (
+        data.get("license_key")
+        or data.get("licence_key")
+        or data.get("key")
+        or ""
+    ).strip()
+
+
 @app.route("/")
 def home():
     return "License Server läuft!"
@@ -45,26 +64,18 @@ def check_key():
 
     return jsonify({
         "valid": True,
-        "source": eintrag.get("source", "unknown")
+        "source": eintrag.get("source", "unknown"),
+        "event": eintrag.get("event", "")
     })
 
 
 @app.route("/digistore_webhook", methods=["POST"])
 def digistore_webhook():
-    # Digistore sendet oft Form-Daten
-    data = request.form.to_dict()
-    if not data:
-        try:
-            data = request.get_json(force=True, silent=True) or {}
-        except:
-            data = {}
+    data = lese_request_daten()
+    keys = lade_keys()
 
-    lizenz_key = (
-        data.get("license_key")
-        or data.get("licence_key")
-        or data.get("key")
-        or ""
-    ).strip()
+    lizenz_key = hole_key_aus_daten(data)
+    event = str(data.get("event", "")).strip().lower()
 
     if not lizenz_key:
         return jsonify({
@@ -72,40 +83,55 @@ def digistore_webhook():
             "error": "Kein license_key empfangen"
         }), 400
 
-    keys = lade_keys()
+    # Rückgabe / Sperrung
+    if event in ["refund", "chargeback", "cancel", "cancellation", "on_refund", "on_chargeback"]:
+        if lizenz_key in keys:
+            keys[lizenz_key]["active"] = False
+            keys[lizenz_key]["event"] = event
+            keys[lizenz_key]["buyer_email"] = data.get("buyer_email", keys[lizenz_key].get("buyer_email", ""))
+            keys[lizenz_key]["order_id"] = data.get("order_id", keys[lizenz_key].get("order_id", ""))
+            keys[lizenz_key]["product_id"] = data.get("product_id", keys[lizenz_key].get("product_id", ""))
+        else:
+            keys[lizenz_key] = {
+                "active": False,
+                "source": "digistore24",
+                "buyer_email": data.get("buyer_email", ""),
+                "order_id": data.get("order_id", ""),
+                "product_id": data.get("product_id", ""),
+                "event": event
+            }
 
+        speichere_keys(keys)
+
+        return jsonify({
+            "ok": True,
+            "action": "deactivated",
+            "license_key": lizenz_key
+        })
+
+    # Kauf / Aktivierung
     keys[lizenz_key] = {
         "active": True,
         "source": "digistore24",
         "buyer_email": data.get("buyer_email", ""),
         "order_id": data.get("order_id", ""),
         "product_id": data.get("product_id", ""),
-        "event": data.get("event", "purchase")
+        "event": event or "purchase"
     }
 
     speichere_keys(keys)
 
     return jsonify({
         "ok": True,
-        "stored_key": lizenz_key
+        "action": "stored",
+        "license_key": lizenz_key
     })
 
 
 @app.route("/deactivate_key", methods=["POST"])
 def deactivate_key():
-    data = request.form.to_dict()
-    if not data:
-        try:
-            data = request.get_json(force=True, silent=True) or {}
-        except:
-            data = {}
-
-    lizenz_key = (
-        data.get("license_key")
-        or data.get("licence_key")
-        or data.get("key")
-        or ""
-    ).strip()
+    data = lese_request_daten()
+    lizenz_key = hole_key_aus_daten(data)
 
     if not lizenz_key:
         return jsonify({
