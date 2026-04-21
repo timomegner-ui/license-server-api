@@ -74,14 +74,74 @@ def digistore_webhook():
     data = lese_request_daten()
     keys = lade_keys()
 
+    print("DIGISTORE DATA:", data, flush=True)
+
+    import uuid
+
     lizenz_key = hole_key_aus_daten(data)
     event = str(data.get("event", "")).strip().lower()
+    order_id = str(data.get("order_id", "")).strip()
 
-    if not lizenz_key:
+    # Falls Digistore keinen license_key mitsendet, erzeugen wir selbst einen
+    if not lizenz_key and event not in ["refund", "chargeback", "cancel", "cancellation", "on_refund", "on_chargeback"]:
+        lizenz_key = "TM-" + str(uuid.uuid4())[:12].upper()
+
+    # Rückgabe / Sperrung
+    if event in ["refund", "chargeback", "cancel", "cancellation", "on_refund", "on_chargeback"]:
+        gefunden = False
+
+        # erst direkt über license_key
+        if lizenz_key and lizenz_key in keys:
+            keys[lizenz_key]["active"] = False
+            keys[lizenz_key]["event"] = event
+            gefunden = True
+
+        # sonst über order_id suchen
+        elif order_id:
+            for k, v in keys.items():
+                if str(v.get("order_id", "")).strip() == order_id:
+                    keys[k]["active"] = False
+                    keys[k]["event"] = event
+                    gefunden = True
+                    lizenz_key = k
+                    break
+
+        speichere_keys(keys)
+
         return jsonify({
-            "ok": False,
-            "error": "Kein license_key empfangen"
-        }), 400
+            "ok": True,
+            "action": "deactivated" if gefunden else "refund_received_but_key_not_found",
+            "license_key": lizenz_key,
+            "event": event
+        }), 200
+
+    # Kauf / Aktivierung
+    if lizenz_key:
+        keys[lizenz_key] = {
+            "active": True,
+            "source": "digistore24",
+            "buyer_email": data.get("buyer_email", ""),
+            "order_id": order_id,
+            "product_id": data.get("product_id", ""),
+            "event": event or "purchase"
+        }
+
+        speichere_keys(keys)
+
+        return jsonify({
+            "ok": True,
+            "action": "stored",
+            "license_key": lizenz_key,
+            "event": event or "purchase"
+        }), 200
+
+    # falls wirklich gar nichts Brauchbares kam: trotzdem 200 zurück
+    return jsonify({
+        "ok": True,
+        "action": "received_but_no_key_stored",
+        "event": event,
+        "data": data
+    }), 200
 
     # Rückgabe / Sperrung
     if event in ["refund", "chargeback", "cancel", "cancellation", "on_refund", "on_chargeback"]:
