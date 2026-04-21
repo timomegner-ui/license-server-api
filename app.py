@@ -103,18 +103,13 @@ def digistore_webhook():
     if event in refund_events:
         gefunden_key = None
 
-        # 1. erst direkt über license_key
         if lizenz_key and lizenz_key in keys:
             gefunden_key = lizenz_key
-
-        # 2. sonst über order_id
         elif order_id:
             for k, v in keys.items():
                 if str(v.get("order_id", "")).strip() == order_id:
                     gefunden_key = k
                     break
-
-        # 3. sonst über buyer_email
         elif buyer_email:
             for k, v in keys.items():
                 if str(v.get("buyer_email", "")).strip().lower() == buyer_email:
