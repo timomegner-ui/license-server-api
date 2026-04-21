@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template_string
 import os
 import json
 import uuid
@@ -77,17 +77,21 @@ def digistore_webhook():
 
     print("DIGISTORE DATA:", data, flush=True)
 
-    import uuid
+    event = str(
+        data.get("event")
+        or data.get("type")
+        or data.get("status")
+        or ""
+    ).strip().lower()
 
-    event = str(data.get("event", "")).strip().lower()
     order_id = str(data.get("order_id", "")).strip()
     buyer_email = str(
         data.get("buyer_email")
         or data.get("email")
         or ""
     ).strip().lower()
-    product_id = str(data.get("product_id", "")).strip()
 
+    product_id = str(data.get("product_id", "")).strip()
     lizenz_key = hole_key_aus_daten(data)
 
     refund_events = [
@@ -95,15 +99,25 @@ def digistore_webhook():
         "on_refund", "on_chargeback"
     ]
 
-    # Rückgabe / Sperrung
+    # Refund / Chargeback / Sperrung
     if event in refund_events:
         gefunden_key = None
 
+        # 1. erst direkt über license_key
         if lizenz_key and lizenz_key in keys:
             gefunden_key = lizenz_key
+
+        # 2. sonst über order_id
         elif order_id:
             for k, v in keys.items():
                 if str(v.get("order_id", "")).strip() == order_id:
+                    gefunden_key = k
+                    break
+
+        # 3. sonst über buyer_email
+        elif buyer_email:
+            for k, v in keys.items():
+                if str(v.get("buyer_email", "")).strip().lower() == buyer_email:
                     gefunden_key = k
                     break
 
@@ -112,9 +126,17 @@ def digistore_webhook():
             keys[gefunden_key]["event"] = event
             speichere_keys(keys)
 
+            return jsonify({
+                "status": "success",
+                "key": "Lizenzstatus aktualisiert.",
+                "data": [],
+                "headline": "Lizenzstatus",
+                "show_on": ["receipt_page", "order_confirmation_email"]
+            }), 200
+
         return jsonify({
             "status": "success",
-            "key": "Lizenzstatus aktualisiert.",
+            "key": "Keine passende Lizenz gefunden.",
             "data": [],
             "headline": "Lizenzstatus",
             "show_on": ["receipt_page", "order_confirmation_email"]
@@ -142,89 +164,226 @@ def digistore_webhook():
         "headline": "Ihr Lizenzschlüssel",
         "show_on": ["receipt_page", "order_confirmation_email"]
     }), 200
-    # Kauf / Aktivierung
-    if lizenz_key:
-        keys[lizenz_key] = {
-            "active": True,
-            "source": "digistore24",
-            "buyer_email": buyer_email,
-            "order_id": order_id,
-            "product_id": product_id,
-            "event": event or "purchase"
-        }
 
-        speichere_keys(keys)
 
+@app.route("/deactivate_key", methods=["POST"])
+def deactivate_key():
+    data = lese_request_daten()
+    lizenz_key = hole_key_aus_daten(data)
+
+    if not lizenz_key:
         return jsonify({
-            "ok": True,
-            "action": "stored",
-            "license_key": lizenz_key,
-            "event": event or "purchase"
-        }), 200
+            "ok": False,
+            "error": "Kein license_key empfangen"
+        }), 400
+
+    keys = lade_keys()
+
+    if lizenz_key not in keys:
+        return jsonify({
+            "ok": False,
+            "error": "Key nicht gefunden"
+        }), 404
+
+    keys[lizenz_key]["active"] = False
+    keys[lizenz_key]["event"] = "deactivated"
+
+    speichere_keys(keys)
 
     return jsonify({
         "ok": True,
-        "action": "received_but_no_key_stored",
-        "event": event,
-        "data": data
-    }), 200
+        "deactivated_key": lizenz_key
+    })
 
 
 @app.route("/license")
 def license_page():
     order_id = request.args.get("order_id", "").strip()
+    buyer_email = request.args.get("buyer_email", "").strip().lower()
     email = request.args.get("email", "").strip().lower()
 
+    such_email = buyer_email or email
     keys = lade_keys()
 
     gefunden_key = None
     gefunden_eintrag = None
 
-    for k, v in keys.items():
-        if order_id and str(v.get("order_id", "")).strip() == order_id:
-            gefunden_key = k
-            gefunden_eintrag = v
+    for key, eintrag in keys.items():
+        if order_id and str(eintrag.get("order_id", "")).strip() == order_id:
+            gefunden_key = key
+            gefunden_eintrag = eintrag
             break
 
-        if email and str(v.get("buyer_email", "")).strip().lower() == email:
-            gefunden_key = k
-            gefunden_eintrag = v
+        if such_email and str(eintrag.get("buyer_email", "")).strip().lower() == such_email:
+            gefunden_key = key
+            gefunden_eintrag = eintrag
             break
 
     if not gefunden_key:
-        return """
-        <html>
-            <head>
-                <meta charset="utf-8">
-                <title>Lizenz nicht gefunden</title>
-            </head>
-            <body style="font-family:Arial;background:#111;color:white;padding:40px;">
-                <h1>Lizenz nicht gefunden</h1>
-                <p>Es konnte noch kein Lizenzschlüssel zugeordnet werden.</p>
-                <p>Bitte prüfe Bestellnummer oder E-Mail-Adresse.</p>
-            </body>
+        return render_template_string("""
+        <!DOCTYPE html>
+        <html lang="de">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Lizenz nicht gefunden</title>
+            <style>
+                body{
+                    margin:0;
+                    font-family:Arial, sans-serif;
+                    background:#0e0e11;
+                    color:white;
+                    padding:40px;
+                }
+                .box{
+                    max-width:900px;
+                    margin:0 auto;
+                }
+                h1{
+                    font-size:64px;
+                    margin-bottom:30px;
+                }
+                p{
+                    font-size:28px;
+                    line-height:1.5;
+                    color:#d6d6d6;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="box">
+                <h1>Kein Lizenzschlüssel gefunden</h1>
+                <p>Wir konnten noch keinen passenden Schlüssel zu deiner Bestellung finden.</p>
+                <p>Bitte warte kurz und lade die Seite neu oder kontaktiere den Support.</p>
+            </div>
+        </body>
         </html>
-        """
+        """)
 
     status = "AKTIV" if gefunden_eintrag.get("active", False) else "GESPERRT"
 
-    return f"""
-    <html>
-        <head>
-            <meta charset="utf-8">
-            <title>Dein Lizenzschlüssel</title>
-        </head>
-        <body style="font-family:Arial;background:#111;color:white;padding:40px;">
+    return render_template_string("""
+    <!DOCTYPE html>
+    <html lang="de">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Dein Lizenzschlüssel</title>
+        <style>
+            body{
+                margin:0;
+                font-family:Arial, sans-serif;
+                background:#0b0b0e;
+                color:white;
+                padding:40px;
+            }
+            .wrap{
+                max-width:1000px;
+                margin:0 auto;
+            }
+            h1{
+                font-size:72px;
+                margin:0 0 40px 0;
+                font-weight:700;
+            }
+            .status{
+                font-size:32px;
+                margin-bottom:30px;
+            }
+            .label{
+                font-size:30px;
+                font-weight:700;
+                margin-bottom:20px;
+            }
+            .keybox{
+                display:flex;
+                align-items:center;
+                justify-content:space-between;
+                gap:20px;
+                background:#171717;
+                border:2px solid #3a3a3a;
+                border-radius:24px;
+                padding:35px 40px;
+                margin:20px 0 40px 0;
+                max-width:900px;
+            }
+            .keytext{
+                font-size:64px;
+                font-weight:700;
+                letter-spacing:1px;
+                word-break:break-all;
+            }
+            .copybtn{
+                border:none;
+                border-radius:14px;
+                background:#2b56ff;
+                color:white;
+                font-size:22px;
+                padding:18px 24px;
+                cursor:pointer;
+                min-width:150px;
+            }
+            .copybtn:hover{
+                background:#1f46e6;
+            }
+            .hint{
+                font-size:28px;
+                line-height:1.5;
+                color:#e5e5e5;
+            }
+            .small{
+                margin-top:25px;
+                color:#9f9f9f;
+                font-size:20px;
+            }
+            @media (max-width: 900px){
+                h1{font-size:44px;}
+                .status{font-size:24px;}
+                .label{font-size:24px;}
+                .keybox{
+                    flex-direction:column;
+                    align-items:flex-start;
+                    padding:24px;
+                }
+                .keytext{font-size:34px;}
+                .copybtn{width:100%;}
+                .hint{font-size:22px;}
+            }
+        </style>
+    </head>
+    <body>
+        <div class="wrap">
             <h1>Dein Lizenzschlüssel</h1>
-            <p><strong>Status:</strong> {status}</p>
-            <p><strong>Lizenzschlüssel:</strong></p>
-            <div style="font-size:28px;padding:20px;background:#1c1c1c;border:1px solid #444;border-radius:10px;display:inline-block;">
-                {gefunden_key}
+
+            <div class="status"><strong>Status:</strong> {{ status }}</div>
+
+            <div class="label">Lizenzschlüssel:</div>
+
+            <div class="keybox">
+                <div class="keytext" id="licenseKey">{{ key }}</div>
+                <button class="copybtn" onclick="copyKey()">Kopieren</button>
             </div>
-            <p style="margin-top:30px;">Bitte kopiere diesen Schlüssel und füge ihn in deine App ein.</p>
-        </body>
+
+            <div class="hint">
+                Bitte kopiere diesen Schlüssel und füge ihn in deine App ein.
+            </div>
+
+            <div class="small" id="copyInfo"></div>
+        </div>
+
+        <script>
+            function copyKey() {
+                const key = document.getElementById("licenseKey").innerText;
+                navigator.clipboard.writeText(key).then(function() {
+                    document.getElementById("copyInfo").innerText = "Lizenzschlüssel wurde kopiert.";
+                }).catch(function() {
+                    document.getElementById("copyInfo").innerText = "Kopieren fehlgeschlagen. Bitte manuell kopieren.";
+                });
+            }
+        </script>
+    </body>
     </html>
-    """
+    """, key=gefunden_key, status=status)
 
 
 if __name__ == "__main__":
