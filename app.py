@@ -72,11 +72,13 @@ def home():
 
 
 # ===============================
-# KEY PRÜFUNG (für deine App)
+# KEY PRÜFUNG (für deine App) + MACHINE ID BINDING
 # ===============================
 @app.route("/check_key")
 def check_key():
     key = request.args.get("key", "").strip()
+    machine_id = request.args.get("machine_id", "").strip()
+
     keys = lade_keys()
 
     if not key:
@@ -89,6 +91,22 @@ def check_key():
 
     if not eintrag.get("active", False):
         return jsonify({"valid": False, "reason": "inactive"})
+
+    gespeicherte_machine = str(eintrag.get("machine_id", "")).strip()
+
+    # Erster gültiger Login -> Gerät merken
+    if not gespeicherte_machine and machine_id:
+        eintrag["machine_id"] = machine_id
+        keys[key] = eintrag
+        speichere_keys(keys)
+        return jsonify({"valid": True, "reason": "bound_to_device"})
+
+    # Wenn schon ein Gerät gespeichert ist, muss es übereinstimmen
+    if gespeicherte_machine:
+        if not machine_id:
+            return jsonify({"valid": False, "reason": "missing_machine_id"})
+        if machine_id != gespeicherte_machine:
+            return jsonify({"valid": False, "reason": "wrong_device"})
 
     return jsonify({"valid": True})
 
@@ -198,7 +216,8 @@ def digistore_webhook():
         "buyer_email": buyer_email,
         "order_id": order_id,
         "product_id": product_id,
-        "event": event or "purchase"
+        "event": event or "purchase",
+        "machine_id": keys.get(vorhandener_key, {}).get("machine_id", "")
     }
 
     speichere_keys(keys)
@@ -256,7 +275,8 @@ def create_free_key():
         "buyer_email": buyer_email,
         "order_id": "FREE",
         "product_id": "FREE",
-        "event": "free"
+        "event": "free",
+        "machine_id": ""
     }
 
     speichere_keys(keys)
@@ -439,6 +459,7 @@ def license_page():
     for key, data in keys.items():
         if data.get("buyer_email", "").strip().lower() == email:
             status = "AKTIV" if data.get("active", False) else "GESPERRT"
+            machine_id = data.get("machine_id", "")
             return render_template_string("""
             <!DOCTYPE html>
             <html lang="de">
@@ -546,6 +567,7 @@ def license_page():
                     </div>
 
                     <div class="small" id="copyInfo"></div>
+                    <div class="small">Gerätebindung: {{ machine_id if machine_id else "noch nicht gebunden" }}</div>
                 </div>
 
                 <script>
@@ -560,7 +582,7 @@ def license_page():
                 </script>
             </body>
             </html>
-            """, key=key, status=status)
+            """, key=key, status=status, machine_id=machine_id)
 
     return "<h1>Kein Key gefunden</h1>"
 
@@ -586,6 +608,7 @@ def admin_panel():
         order_id = data.get("order_id", "")
         product_id = data.get("product_id", "")
         event = data.get("event", "")
+        machine_id = data.get("machine_id", "")
 
         rows.append(f"""
         <tr>
@@ -595,6 +618,7 @@ def admin_panel():
             <td>{order_id}</td>
             <td>{product_id}</td>
             <td>{event}</td>
+            <td>{machine_id}</td>
             <td>
                 <form method="post" action="/admin/enable" style="display:inline;">
                     <input type="hidden" name="key" value="{key}">
@@ -731,11 +755,12 @@ def admin_panel():
                     <th>Order ID</th>
                     <th>Product ID</th>
                     <th>Event</th>
+                    <th>Machine ID</th>
                     <th>Aktionen</th>
                 </tr>
             </thead>
             <tbody>
-                {''.join(rows) if rows else '<tr><td colspan="7" class="empty">Keine Keys vorhanden.</td></tr>'}
+                {''.join(rows) if rows else '<tr><td colspan="8" class="empty">Keine Keys vorhanden.</td></tr>'}
             </tbody>
         </table>
     </body>
@@ -774,7 +799,8 @@ def admin_create_free_key():
         "buyer_email": buyer_email,
         "order_id": "FREE",
         "product_id": "FREE",
-        "event": "free"
+        "event": "free",
+        "machine_id": ""
     }
 
     speichere_keys(keys)
