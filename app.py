@@ -198,6 +198,65 @@ def digistore_webhook():
 
 
 # ===============================
+# GRATIS-KEY ERZEUGEN (GESCHÜTZT)
+# ===============================
+@app.route("/create_free_key", methods=["POST", "GET"])
+def create_free_key():
+    secret = request.args.get("secret", "").strip()
+
+    if secret != RESET_SECRET:
+        return jsonify({
+            "ok": False,
+            "error": "unauthorized"
+        }), 403
+
+    data = lese_request_daten()
+    if not data:
+        data = request.args.to_dict()
+
+    buyer_email = str(
+        data.get("buyer_email")
+        or data.get("email")
+        or "FREE"
+    ).strip().lower()
+
+    keys = lade_keys()
+
+    # wenn für diese Mail schon ein aktiver Free-Key existiert -> wiederverwenden
+    for key, eintrag in keys.items():
+        if (
+            str(eintrag.get("buyer_email", "")).strip().lower() == buyer_email
+            and str(eintrag.get("event", "")).strip().lower() == "free"
+            and eintrag.get("active", False)
+        ):
+            return jsonify({
+                "ok": True,
+                "key": key,
+                "buyer_email": buyer_email,
+                "message": "Vorhandener Free-Key wiederverwendet"
+            })
+
+    neuer_key = "TM-" + str(uuid.uuid4())[:12].upper()
+
+    keys[neuer_key] = {
+        "active": True,
+        "buyer_email": buyer_email,
+        "order_id": "FREE",
+        "product_id": "FREE",
+        "event": "free"
+    }
+
+    speichere_keys(keys)
+
+    return jsonify({
+        "ok": True,
+        "key": neuer_key,
+        "buyer_email": buyer_email,
+        "message": "Neuer Free-Key erstellt"
+    })
+
+
+# ===============================
 # KEY MANUELL DEAKTIVIEREN
 # ===============================
 @app.route("/deactivate_key", methods=["POST"])
