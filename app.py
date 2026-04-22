@@ -157,18 +157,15 @@ def digistore_webhook():
     # Kauf / Aktivierung
     vorhandener_key = None
 
-    # 1. Bereits vorhandenen Key über order_id suchen
     if order_id:
         for k, v in keys.items():
             if str(v.get("order_id", "")).strip() == order_id:
                 vorhandener_key = k
                 break
 
-    # 2. Falls nichts gefunden wurde und Digistore schon einen Key mitgibt
     if not vorhandener_key and lizenz_key:
         vorhandener_key = lizenz_key
 
-    # 3. Optional: gleiche E-Mail + gleiches Produkt wiederverwenden
     if not vorhandener_key and buyer_email and product_id:
         for k, v in keys.items():
             if (
@@ -179,7 +176,6 @@ def digistore_webhook():
                 vorhandener_key = k
                 break
 
-    # 4. Nur wenn wirklich nichts existiert -> neuen Key erzeugen
     if not vorhandener_key:
         vorhandener_key = "TM-" + str(uuid.uuid4())[:12].upper()
 
@@ -316,6 +312,46 @@ def disable_key():
     return jsonify({
         "ok": True,
         "disabled_key": key
+    })
+
+
+# ===============================
+# EINZELNEN KEY AKTIVIEREN (GESCHÜTZT)
+# ===============================
+@app.route("/enable_key", methods=["POST"])
+def enable_key():
+    secret = request.args.get("secret", "").strip()
+
+    if secret != RESET_SECRET:
+        return jsonify({
+            "ok": False,
+            "error": "unauthorized"
+        }), 403
+
+    data = lese_request_daten()
+    key = hole_key_aus_daten(data)
+
+    if not key:
+        return jsonify({
+            "ok": False,
+            "error": "no_key"
+        }), 400
+
+    keys = lade_keys()
+
+    if key not in keys:
+        return jsonify({
+            "ok": False,
+            "error": "not_found"
+        }), 404
+
+    keys[key]["active"] = True
+    keys[key]["event"] = "enabled_by_admin"
+    speichere_keys(keys)
+
+    return jsonify({
+        "ok": True,
+        "enabled_key": key
     })
 
 
@@ -488,7 +524,11 @@ def admin_panel():
             <td>{product_id}</td>
             <td>{event}</td>
             <td>
-                <form method="post" action="/admin/disable" style="display:inline;">
+                <form method="post" action="/admin/enable" style="display:inline;">
+                    <input type="hidden" name="key" value="{key}">
+                    <button type="submit" style="background:#0a7f2e;color:white;">Aktivieren</button>
+                </form>
+                <form method="post" action="/admin/disable" style="display:inline; margin-left:8px;">
                     <input type="hidden" name="key" value="{key}">
                     <button type="submit">Deaktivieren</button>
                 </form>
@@ -598,6 +638,26 @@ def admin_panel():
     </html>
     """
     return html
+
+
+@app.route("/admin/enable", methods=["POST"])
+def admin_enable():
+    if not admin_auth_ok():
+        return (
+            "Login erforderlich",
+            401,
+            {"WWW-Authenticate": 'Basic realm="Admin Login"'}
+        )
+
+    key = request.form.get("key", "").strip()
+    keys = lade_keys()
+
+    if key in keys:
+        keys[key]["active"] = True
+        keys[key]["event"] = "enabled_by_admin"
+        speichere_keys(keys)
+
+    return "", 302, {"Location": "/admin"}
 
 
 @app.route("/admin/disable", methods=["POST"])
