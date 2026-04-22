@@ -8,6 +8,9 @@ app = Flask(__name__)
 DATA_FILE = "keys.json"
 RESET_SECRET = "MEIN_GEHEIMER_RESET_KEY_123"
 
+ADMIN_USER = "admin"
+ADMIN_PASSWORD = "DEIN_SICHERES_PASSWORT_123"
+
 
 def lade_keys():
     if not os.path.exists(DATA_FILE):
@@ -41,6 +44,12 @@ def hole_key_aus_daten(data):
         or data.get("key")
         or ""
     ).strip()
+
+
+def admin_auth_ok():
+    user = request.authorization.username if request.authorization else ""
+    password = request.authorization.password if request.authorization else ""
+    return user == ADMIN_USER and password == ADMIN_PASSWORD
 
 
 @app.route("/")
@@ -421,6 +430,201 @@ def license_page():
             """, key=key, status=status)
 
     return "<h1>Kein Key gefunden</h1>"
+
+
+# ===============================
+# ADMIN PANEL
+# ===============================
+@app.route("/admin")
+def admin_panel():
+    if not admin_auth_ok():
+        return (
+            "Login erforderlich",
+            401,
+            {"WWW-Authenticate": 'Basic realm="Admin Login"'}
+        )
+
+    keys = lade_keys()
+
+    rows = []
+    for key, data in keys.items():
+        status = "AKTIV" if data.get("active", False) else "GESPERRT"
+        buyer_email = data.get("buyer_email", "")
+        order_id = data.get("order_id", "")
+        product_id = data.get("product_id", "")
+        event = data.get("event", "")
+
+        rows.append(f"""
+        <tr>
+            <td>{key}</td>
+            <td>{status}</td>
+            <td>{buyer_email}</td>
+            <td>{order_id}</td>
+            <td>{product_id}</td>
+            <td>{event}</td>
+            <td>
+                <form method="post" action="/admin/disable" style="display:inline;">
+                    <input type="hidden" name="key" value="{key}">
+                    <button type="submit">Deaktivieren</button>
+                </form>
+                <form method="post" action="/admin/delete" style="display:inline; margin-left:8px;">
+                    <input type="hidden" name="key" value="{key}">
+                    <button type="submit" style="background:#b00020;color:white;">Löschen</button>
+                </form>
+            </td>
+        </tr>
+        """)
+
+    html = f"""
+    <!DOCTYPE html>
+    <html lang="de">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Admin Panel</title>
+        <style>
+            body {{
+                font-family: Arial, sans-serif;
+                background: #0b0b0e;
+                color: white;
+                margin: 0;
+                padding: 30px;
+            }}
+            h1 {{
+                margin-top: 0;
+            }}
+            .topbar {{
+                display:flex;
+                justify-content:space-between;
+                align-items:center;
+                margin-bottom:20px;
+                gap: 12px;
+                flex-wrap: wrap;
+            }}
+            .btn {{
+                padding: 10px 16px;
+                border: none;
+                border-radius: 10px;
+                cursor: pointer;
+                background: #2b56ff;
+                color: white;
+                font-size: 14px;
+            }}
+            .danger {{
+                background: #b00020;
+            }}
+            table {{
+                width: 100%;
+                border-collapse: collapse;
+                background: #171717;
+                border-radius: 12px;
+                overflow: hidden;
+            }}
+            th, td {{
+                padding: 12px;
+                border-bottom: 1px solid #333;
+                text-align: left;
+                vertical-align: top;
+                font-size: 14px;
+            }}
+            th {{
+                background: #1f1f1f;
+            }}
+            tr:hover {{
+                background: #202020;
+            }}
+            button {{
+                padding: 8px 12px;
+                border: none;
+                border-radius: 8px;
+                cursor: pointer;
+            }}
+            .empty {{
+                margin-top: 20px;
+                color: #bbb;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="topbar">
+            <h1>Lizenz Admin Panel</h1>
+            <form method="post" action="/admin/reset_all" onsubmit="return confirm('Wirklich alle Keys löschen?');">
+                <button class="btn danger" type="submit">Alle Keys löschen</button>
+            </form>
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Key</th>
+                    <th>Status</th>
+                    <th>E-Mail</th>
+                    <th>Order ID</th>
+                    <th>Product ID</th>
+                    <th>Event</th>
+                    <th>Aktionen</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(rows) if rows else '<tr><td colspan="7" class="empty">Keine Keys vorhanden.</td></tr>'}
+            </tbody>
+        </table>
+    </body>
+    </html>
+    """
+    return html
+
+
+@app.route("/admin/disable", methods=["POST"])
+def admin_disable():
+    if not admin_auth_ok():
+        return (
+            "Login erforderlich",
+            401,
+            {"WWW-Authenticate": 'Basic realm="Admin Login"'}
+        )
+
+    key = request.form.get("key", "").strip()
+    keys = lade_keys()
+
+    if key in keys:
+        keys[key]["active"] = False
+        keys[key]["event"] = "disabled_by_admin"
+        speichere_keys(keys)
+
+    return "", 302, {"Location": "/admin"}
+
+
+@app.route("/admin/delete", methods=["POST"])
+def admin_delete():
+    if not admin_auth_ok():
+        return (
+            "Login erforderlich",
+            401,
+            {"WWW-Authenticate": 'Basic realm="Admin Login"'}
+        )
+
+    key = request.form.get("key", "").strip()
+    keys = lade_keys()
+
+    if key in keys:
+        del keys[key]
+        speichere_keys(keys)
+
+    return "", 302, {"Location": "/admin"}
+
+
+@app.route("/admin/reset_all", methods=["POST"])
+def admin_reset_all():
+    if not admin_auth_ok():
+        return (
+            "Login erforderlich",
+            401,
+            {"WWW-Authenticate": 'Basic realm="Admin Login"'}
+        )
+
+    speichere_keys({})
+    return "", 302, {"Location": "/admin"}
 
 
 if __name__ == "__main__":
