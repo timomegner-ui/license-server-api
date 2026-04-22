@@ -8,12 +8,17 @@ app = Flask(__name__)
 # ===============================
 # PERSISTENTER SPEICHER AUF RENDER DISK
 # ===============================
-if os.path.exists("/data"):
+if os.path.exists("/Data"):
+    DATA_DIR = "/Data"
+elif os.path.exists("/data"):
     DATA_DIR = "/data"
 else:
     DATA_DIR = "."
 
+print("AKTIVES DATA_DIR:", DATA_DIR, flush=True)
+
 DATA_FILE = os.path.join(DATA_DIR, "keys.json")
+print("DATA_FILE:", DATA_FILE, flush=True)
 
 RESET_SECRET = "MEIN_GEHEIMER_RESET_KEY_123"
 
