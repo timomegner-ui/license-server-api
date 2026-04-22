@@ -142,8 +142,8 @@ def digistore_webhook():
 
             return jsonify({
                 "status": "success",
-                "key": "Lizenz deaktiviert",
-                "headline": "Lizenzstatus",
+                "key": gefunden_key,
+                "headline": "Lizenz deaktiviert",
                 "show_on": ["receipt_page", "order_confirmation_email"]
             }), 200
 
@@ -155,10 +155,35 @@ def digistore_webhook():
         }), 200
 
     # Kauf / Aktivierung
-    if not lizenz_key:
-        lizenz_key = "TM-" + str(uuid.uuid4())[:12].upper()
+    vorhandener_key = None
 
-    keys[lizenz_key] = {
+    # 1. Bereits vorhandenen Key über order_id suchen
+    if order_id:
+        for k, v in keys.items():
+            if str(v.get("order_id", "")).strip() == order_id:
+                vorhandener_key = k
+                break
+
+    # 2. Falls nichts gefunden wurde und Digistore schon einen Key mitgibt
+    if not vorhandener_key and lizenz_key:
+        vorhandener_key = lizenz_key
+
+    # 3. Optional: gleiche E-Mail + gleiches Produkt wiederverwenden
+    if not vorhandener_key and buyer_email and product_id:
+        for k, v in keys.items():
+            if (
+                str(v.get("buyer_email", "")).strip().lower() == buyer_email
+                and str(v.get("product_id", "")).strip() == product_id
+                and v.get("active", False)
+            ):
+                vorhandener_key = k
+                break
+
+    # 4. Nur wenn wirklich nichts existiert -> neuen Key erzeugen
+    if not vorhandener_key:
+        vorhandener_key = "TM-" + str(uuid.uuid4())[:12].upper()
+
+    keys[vorhandener_key] = {
         "active": True,
         "buyer_email": buyer_email,
         "order_id": order_id,
@@ -170,7 +195,7 @@ def digistore_webhook():
 
     return jsonify({
         "status": "success",
-        "key": lizenz_key,
+        "key": vorhandener_key,
         "headline": "Dein Lizenzschlüssel",
         "show_on": ["receipt_page", "order_confirmation_email"]
     }), 200
