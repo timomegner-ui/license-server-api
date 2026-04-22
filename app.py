@@ -222,7 +222,6 @@ def create_free_key():
 
     keys = lade_keys()
 
-    # wenn für diese Mail schon ein aktiver Free-Key existiert -> wiederverwenden
     for key, eintrag in keys.items():
         if (
             str(eintrag.get("buyer_email", "")).strip().lower() == buyer_email
@@ -620,10 +619,29 @@ def admin_panel():
             .topbar {{
                 display:flex;
                 justify-content:space-between;
-                align-items:center;
+                align-items:flex-start;
                 margin-bottom:20px;
                 gap: 12px;
                 flex-wrap: wrap;
+            }}
+            .right-tools {{
+                display:flex;
+                flex-direction:column;
+                gap:12px;
+                align-items:flex-end;
+            }}
+            .free-form {{
+                display:flex;
+                gap:8px;
+                flex-wrap:wrap;
+                align-items:center;
+                justify-content:flex-end;
+            }}
+            .free-form input {{
+                padding:10px 12px;
+                border-radius:10px;
+                border:none;
+                min-width:260px;
             }}
             .btn {{
                 padding: 10px 16px;
@@ -672,9 +690,22 @@ def admin_panel():
     <body>
         <div class="topbar">
             <h1>Lizenz Admin Panel</h1>
-            <form method="post" action="/admin/reset_all" onsubmit="return confirm('Wirklich alle Keys löschen?');">
-                <button class="btn danger" type="submit">Alle Keys löschen</button>
-            </form>
+
+            <div class="right-tools">
+                <form method="post" action="/admin/create_free_key" class="free-form">
+                    <input
+                        type="email"
+                        name="buyer_email"
+                        placeholder="kollege@mail.de"
+                        required
+                    >
+                    <button class="btn" type="submit">Free Key erstellen</button>
+                </form>
+
+                <form method="post" action="/admin/reset_all" onsubmit="return confirm('Wirklich alle Keys löschen?');">
+                    <button class="btn danger" type="submit">Alle Keys löschen</button>
+                </form>
+            </div>
         </div>
 
         <table>
@@ -697,6 +728,43 @@ def admin_panel():
     </html>
     """
     return html
+
+
+@app.route("/admin/create_free_key", methods=["POST"])
+def admin_create_free_key():
+    if not admin_auth_ok():
+        return (
+            "Login erforderlich",
+            401,
+            {"WWW-Authenticate": 'Basic realm="Admin Login"'}
+        )
+
+    buyer_email = request.form.get("buyer_email", "").strip().lower()
+    keys = lade_keys()
+
+    if not buyer_email:
+        return "", 302, {"Location": "/admin"}
+
+    for key, eintrag in keys.items():
+        if (
+            str(eintrag.get("buyer_email", "")).strip().lower() == buyer_email
+            and str(eintrag.get("event", "")).strip().lower() == "free"
+            and eintrag.get("active", False)
+        ):
+            return "", 302, {"Location": "/admin"}
+
+    neuer_key = "TM-" + str(uuid.uuid4())[:12].upper()
+
+    keys[neuer_key] = {
+        "active": True,
+        "buyer_email": buyer_email,
+        "order_id": "FREE",
+        "product_id": "FREE",
+        "event": "free"
+    }
+
+    speichere_keys(keys)
+    return "", 302, {"Location": "/admin"}
 
 
 @app.route("/admin/enable", methods=["POST"])
