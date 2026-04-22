@@ -21,7 +21,6 @@ DATA_FILE = os.path.join(DATA_DIR, "keys.json")
 print("DATA_FILE:", DATA_FILE, flush=True)
 
 RESET_SECRET = "MEIN_GEHEIMER_RESET_KEY_123"
-
 ADMIN_USER = "admin"
 ADMIN_PASSWORD = "DEIN_SICHERES_PASSWORT_123"
 
@@ -72,7 +71,7 @@ def home():
 
 
 # ===============================
-# KEY PRÜFUNG (für deine App) + MACHINE ID BINDING
+# KEY PRÜFUNG + MACHINE-ID-BINDING
 # ===============================
 @app.route("/check_key")
 def check_key():
@@ -94,14 +93,12 @@ def check_key():
 
     gespeicherte_machine = str(eintrag.get("machine_id", "")).strip()
 
-    # Erster gültiger Login -> Gerät merken
     if not gespeicherte_machine and machine_id:
         eintrag["machine_id"] = machine_id
         keys[key] = eintrag
         speichere_keys(keys)
         return jsonify({"valid": True, "reason": "bound_to_device"})
 
-    # Wenn schon ein Gerät gespeichert ist, muss es übereinstimmen
     if gespeicherte_machine:
         if not machine_id:
             return jsonify({"valid": False, "reason": "missing_machine_id"})
@@ -150,7 +147,6 @@ def digistore_webhook():
         "on_refund", "on_chargeback"
     ]
 
-    # Refund / Chargeback / Sperrung
     if event in refund_events:
         gefunden_key = None
 
@@ -186,7 +182,6 @@ def digistore_webhook():
             "show_on": ["receipt_page", "order_confirmation_email"]
         }), 200
 
-    # Kauf / Aktivierung
     vorhandener_key = None
 
     if order_id:
@@ -211,13 +206,15 @@ def digistore_webhook():
     if not vorhandener_key:
         vorhandener_key = "TM-" + str(uuid.uuid4())[:12].upper()
 
+    bestehend = keys.get(vorhandener_key, {})
+
     keys[vorhandener_key] = {
         "active": True,
         "buyer_email": buyer_email,
         "order_id": order_id,
         "product_id": product_id,
         "event": event or "purchase",
-        "machine_id": keys.get(vorhandener_key, {}).get("machine_id", "")
+        "machine_id": bestehend.get("machine_id", "")
     }
 
     speichere_keys(keys)
@@ -448,6 +445,46 @@ def enable_key():
 
 
 # ===============================
+# MACHINE-ID RESET (GESCHÜTZT)
+# ===============================
+@app.route("/reset_device_key", methods=["POST"])
+def reset_device_key():
+    secret = request.args.get("secret", "").strip()
+
+    if secret != RESET_SECRET:
+        return jsonify({
+            "ok": False,
+            "error": "unauthorized"
+        }), 403
+
+    data = lese_request_daten()
+    key = hole_key_aus_daten(data)
+
+    if not key:
+        return jsonify({
+            "ok": False,
+            "error": "no_key"
+        }), 400
+
+    keys = lade_keys()
+
+    if key not in keys:
+        return jsonify({
+            "ok": False,
+            "error": "not_found"
+        }), 404
+
+    keys[key]["machine_id"] = ""
+    keys[key]["event"] = "device_reset"
+    speichere_keys(keys)
+
+    return jsonify({
+        "ok": True,
+        "reset_device_key": key
+    })
+
+
+# ===============================
 # LICENSE PAGE
 # ===============================
 @app.route("/license")
@@ -627,6 +664,10 @@ def admin_panel():
                 <form method="post" action="/admin/disable" style="display:inline; margin-left:8px;">
                     <input type="hidden" name="key" value="{key}">
                     <button type="submit">Deaktivieren</button>
+                </form>
+                <form method="post" action="/admin/reset_device" style="display:inline; margin-left:8px;">
+                    <input type="hidden" name="key" value="{key}">
+                    <button type="submit" style="background:#ff9800;color:white;">Gerät reset</button>
                 </form>
                 <form method="post" action="/admin/delete" style="display:inline; margin-left:8px;">
                     <input type="hidden" name="key" value="{key}">
@@ -842,6 +883,26 @@ def admin_disable():
     if key in keys:
         keys[key]["active"] = False
         keys[key]["event"] = "disabled_by_admin"
+        speichere_keys(keys)
+
+    return "", 302, {"Location": "/admin"}
+
+
+@app.route("/admin/reset_device", methods=["POST"])
+def admin_reset_device():
+    if not admin_auth_ok():
+        return (
+            "Login erforderlich",
+            401,
+            {"WWW-Authenticate": 'Basic realm="Admin Login"'}
+        )
+
+    key = request.form.get("key", "").strip()
+    keys = lade_keys()
+
+    if key in keys:
+        keys[key]["machine_id"] = ""
+        keys[key]["event"] = "device_reset_by_admin"
         speichere_keys(keys)
 
     return "", 302, {"Location": "/admin"}
